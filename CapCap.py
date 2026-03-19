@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Outil de scan reseau a but éthique et professionnel a utiliser uniquement avec accord du propriétaire du réseau.
-# Code par Mr.Dark(moi). Ce script fait environ 217 lignes de code Python.
+# Code par Mr.Dark (moi). Version optimisée v3.2.
 
 """
 ╔══════════════════════════════════════════════════════════════╗
-║  🚀 WiFi Network Scanner PRO v3.0 - Outils pour le recon     ║
+║  🚀 WiFi Network Scanner PRO v3.2 - Outils pour le recon     ║
 ║  🔍 Auto-détection + Scan ports + JSON + Couleurs PRO        ║
 ╚══════════════════════════════════════════════════════════════╝
 """
@@ -14,10 +14,10 @@ import socket
 import time
 import json
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import ipaddress
 
-# ANSI Colors PRO
+# ANSI Couleurs PRO
 class Colors:
     RED = '\033[91m'; GREEN = '\033[92m'; YELLOW = '\033[93m'
     BLUE = '\033[94m'; PURPLE = '\033[95m'; CYAN = '\033[96m'
@@ -47,9 +47,13 @@ class Capcap:
     def __init__(self):
         self.network = None
         self.active_hosts = []
-        self.vulnerable_hosts = {}
+        self.vulnerable_hosts = {}  # Stocke {ip: [ports]}
+        # Ports prioritaires et courants
         self.ports = [21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 993, 995, 1723, 3306, 3389, 5900, 8080, 8443]
-        self.services = {21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 80: 'HTTP', 443: 'HTTPS', 3389: 'RDP', 3306: 'MySQL'}
+        self.services = {21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 53: 'DNS', 80: 'HTTP', 
+                         110: 'POP3', 111: 'RPC', 135: 'MSRPC', 139: 'NetBIOS', 143: 'IMAP', 
+                         443: 'HTTPS', 993: 'IMAPS', 995: 'POP3S', 1723: 'PPTP', 3306: 'MySQL', 
+                         3389: 'RDP', 5900: 'VNC', 8080: 'HTTP-Proxy', 8443: 'HTTPS-Alt'}
 
     def detecteur_reseau(self):
         print(f"{Colors.YELLOW}{Colors.BOLD}[1/4] DÉTECTION RÉSEAU{Colors.END}")
@@ -87,18 +91,38 @@ class Capcap:
                 print(f"{Colors.RED}❌ Format invalide ! ex: 192.168.1.0/24{Colors.END}")
 
     def ping_rapide(self, ip):
-        """Ping ultra-rapide multi-ports"""
+        """Ping ultra-rapide multi-ports avec gestion propre des sockets"""
         test_ports = [80, 443, 22]
         for port in test_ports:
+            s = None
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(0.2)
+                s.settimeout(0.5)
+                # CORRECTION 1 : Utilisation de finally pour garantir la fermeture du socket
                 if s.connect_ex((str(ip), port)) == 0:
-                    s.close()
                     return True
             except Exception:
                 pass
+            finally:
+                if s:
+                    s.close()
         return False
+
+    def detect_http(self, ip):
+        """Détecte la bannière du serveur HTTP si le port 80 est ouvert"""
+        try:
+            s = socket.socket() 
+            s.settimeout(0.9)
+            s.connect((ip, 80))
+            s.send(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n")
+            data = s.recv(1024).decode(errors="ignore")
+            s.close()
+
+            if "Server:" in data:
+                return data.split("Server:")[1].split("\r\n")[0].strip()
+        except:
+            pass
+        return None
 
     def scan_hosts(self, network):
         print(f"\n{Colors.BLUE}{Colors.BOLD}[2/4] DÉCOUVERTE HÔTES ({network}){Colors.END}")
@@ -110,7 +134,7 @@ class Capcap:
             futures = {executor.submit(self.ping_rapide, host): host for host in net.hosts()}
             total = len(futures)
             
-            for i, future in enumerate(futures, 1):
+            for i, future in enumerate(as_completed(futures), 1):
                 if i % 100 == 0 or i == total:
                     print(f"{Colors.YELLOW}\r⏳ {i}/{total} ({i/total*100:.0f}%)...{Colors.END}", end='')
                 
@@ -126,22 +150,29 @@ class Capcap:
         print(f"\n{Colors.BOLD}🎉 {Colors.GREEN}{len(active)}{Colors.END} hôtes actifs détectés !")
         return len(active) > 0
 
-    def check_port(self, ip, port):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(0.2)
-            result = s.connect_ex((ip, port))
-            s.close()
-            return result == 0
-        except Exception:
-            return False
+    def check_port(self, ip, port, retries=2):
+        for _ in range(retries):
+            s = None
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.3) # Timeout à 0.3 pour rapidité
+
+                if s.connect_ex((ip, port)) == 0:
+                    return True
+            except:
+                pass
+            finally:
+                if s:
+                    s.close()
+        return False
 
     def scan_de_ports(self, ip):
         """Scan de ports complet"""
         open_ports = []
-        with ThreadPoolExecutor(max_workers=50) as executor:
+        # workers à 80 pour plus de rapidité
+        with ThreadPoolExecutor(max_workers=80) as executor:
             futures = {executor.submit(self.check_port, ip, port): port for port in self.ports}
-            for future in futures:
+            for future in as_completed(futures):
                 try:
                     if future.result():
                         open_ports.append(futures[future])
@@ -161,6 +192,12 @@ class Capcap:
                 self.vulnerable_hosts[ip] = ports
                 services = ', '.join([f"{p}({self.services.get(p,'?')})" for p in ports])
                 print(f"{Colors.RED}🚨{Colors.END} {Colors.BOLD}{len(ports)} ports: {services}{Colors.END}")
+                
+                # CORRECTION 3 : Optimisation logique - ne vérifier HTTP que si port 80 ouvert
+                if 80 in ports:
+                    server = self.detect_http(ip)
+                    if server:
+                        print(f"     🌐 Server: {server}")
             else:
                 print(f"{Colors.YELLOW}🔒{Colors.END}")
 
@@ -187,7 +224,7 @@ class Capcap:
             'network': self.network,
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
             'active_hosts': self.active_hosts,
-            'vulnerable_hosts': self.vulnerable_hosts
+            'vulnerable_hosts': {ip: ports for ip, ports in self.vulnerable_hosts.items()}
         }
         filename = f"WiFiScan_{time.strftime('%Y%m%d_%H%M%S')}.json"
         with open(filename, 'w') as f:
