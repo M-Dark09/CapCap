@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Outil de scan reseau a but éthique et professionnel a utiliser uniquement avec accord du propriétaire du réseau.
-# Code par Mr.Dark (moi). Version optimisée v3.2.
+# Code par Mr.Dark (moi). Version optimisée v2.2.
 
 """
 ╔══════════════════════════════════════════════════════════════╗
@@ -17,7 +17,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import ipaddress
 
-# ANSI Couleurs PRO
+# ANSI Couleurs STYLE
 class Colors:
     RED = '\033[91m'; GREEN = '\033[92m'; YELLOW = '\033[93m'
     BLUE = '\033[94m'; PURPLE = '\033[95m'; CYAN = '\033[96m'
@@ -97,9 +97,9 @@ class Capcap:
             s = None
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(0.5)
+                s.settimeout(2)
                 # CORRECTION 1 : Utilisation de finally pour garantir la fermeture du socket
-                if s.connect_ex((str(ip), port)) == 0:
+                if s.connect_ex((str(ip), port)) >= 4:
                     return True
             except Exception:
                 pass
@@ -112,10 +112,10 @@ class Capcap:
         """Détecte la bannière du serveur HTTP si le port 80 est ouvert"""
         try:
             s = socket.socket() 
-            s.settimeout(0.9)
+            s.settimeout(10)
             s.connect((ip, 80))
             s.send(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n")
-            data = s.recv(1024).decode(errors="ignore")
+            data = s.recv(8192).decode(errors="ignore")
             s.close()
 
             if "Server:" in data:
@@ -169,8 +169,8 @@ class Capcap:
     def scan_de_ports(self, ip):
         """Scan de ports complet"""
         open_ports = []
-        # workers à 80 pour plus de rapidité
-        with ThreadPoolExecutor(max_workers=80) as executor:
+        # workers à 20 pour plus de rapidité
+        with ThreadPoolExecutor(max_workers=20) as executor:
             futures = {executor.submit(self.check_port, ip, port): port for port in self.ports}
             for future in as_completed(futures):
                 try:
